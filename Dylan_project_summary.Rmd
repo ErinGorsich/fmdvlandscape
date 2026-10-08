@@ -8,11 +8,10 @@ output: html_document
 ```{r setup, include=FALSE}
 library(ggplot2)
 library(tidyr)
-library(sf)
-library(sp)
+# library(sf)
+# library(sp)
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 df <- readRDS("herd_centroid_200m_all_dates.rds")  # herd_centroids_200m
-herd <- readRDS("herd_membership_all_dates_200m.RDS")
-
 ```
 
 # Data summary for model
@@ -21,33 +20,33 @@ herd <- readRDS("herd_membership_all_dates_200m.RDS")
 ![(a) Initial capture location for 2019 buffalo collared and (b) movement paths](tempfig1.png)
 
 ```{r maps_parkwide_prep, echo=FALSE, include = FALSE}
-# Population features from Aug 2025 survey
-loc <- "/Users/u1774615/Library/CloudStorage/GoogleDrive-eringorsich@gmail.com/My Drive/Warwick/students/Diana/Buffalo behavior_Dylan/"
-population_data <- read.csv(paste0(loc, "buffalo_census_2025.csv"))
-pop_df <- data.frame(
-    pop_id = seq(1, length(population_data[,1]) ),
-    total = population_data$TOTAL,
-    bulls = population_data$Bulls,
-    latitude = population_data$Latitude,
-    longitude = population_data$Longitude)
-pop_df$herdtype <- NA
-pop_df$land_type <- NA
-for (i in 1:length(pop_df[, 1])){
-    ifelse((pop_df$total[[i]] - pop_df$bulls[[i]]) > 0,
-    pop_df$herdtype[[i]] <- "mixed",
-    pop_df$herdtype[[i]] <- "bulls")
-}
-n_mixed_groups <- length(pop_df[pop_df$herdtype == "mixed", ])
-n_buffalo <- sum(pop_df$total)
-
-pop_sf <- st_as_sf(pop_df, coords = c("longitude","latitude"))
-knp <- st_read(paste0(loc, "gis/bndry_kruger.shp"))
-st_crs(pop_sf) <- st_crs(knp)
+# # Population features from Aug 2025 survey
+# loc <- "/Users/u1774615/Library/CloudStorage/GoogleDrive-eringorsich@gmail.com/My Drive/Warwick/students/Diana/Buffalo behavior_Dylan/"
+# population_data <- read.csv(paste0(loc, "buffalo_census_2025.csv"))
+# pop_df <- data.frame(
+#     pop_id = seq(1, length(population_data[,1]) ),
+#     total = population_data$TOTAL,
+#     bulls = population_data$Bulls,
+#     latitude = population_data$Latitude,
+#     longitude = population_data$Longitude)
+# pop_df$herdtype <- NA
+# pop_df$land_type <- NA
+# for (i in 1:length(pop_df[, 1])){
+#     ifelse((pop_df$total[[i]] - pop_df$bulls[[i]]) > 0,
+#     pop_df$herdtype[[i]] <- "mixed",
+#     pop_df$herdtype[[i]] <- "bulls")
+# }
+# n_mixed_groups <- length(pop_df[pop_df$herdtype == "mixed", ])
+# n_buffalo <- sum(pop_df$total)
+# 
+# pop_sf <- st_as_sf(pop_df, coords = c("longitude","latitude"))
+# knp <- st_read(paste0(loc, "gis/bndry_kruger.shp"))
+# st_crs(pop_sf) <- st_crs(knp)
 ```
 
 ```{r maps_parkwide, echo=FALSE}
-ggplot() + geom_sf(data = knp) + 
-    geom_sf(data = pop_sf, aes(colour = herdtype, size = total))
+# ggplot() + geom_sf(data = knp) + 
+#     geom_sf(data = pop_sf, aes(colour = herdtype, size = total))
 # ggplot() + geom_sf(data = knp) + 
 #     geom_sf(data = pop_sf[pop_sf$herdtype == "mixed",], 
 #             aes(colour = herdtype, size = total))
@@ -73,11 +72,14 @@ get_big_herds = function(date, df = df){
 }
 test <- get_big_herds("2023-08-01", df)
 
-For a given date, grab all the herds with any ids in list, for given date
-currentlist needs to dataframe
-get_next_herds = function(currentlist, date, df = df){
+# For a given big herd dataset, summarise number of herds and max size at next time step
+add_next_herds = function(currentlist, df = df){
+  # Function reads in currentlist = dataframe with big herds
+  # date = character string with next date
+  
     # at t=2, get data and list of herds/buffalo
-    dfred <- df[df$date == eval(date), c(2,3,5,6,8, 9)]
+    t2 <- currentlist$date[1] + 1
+    dfred <- df[df$date == t2, c(2,3,5,6,8, 9)]
     nextlist <- dfred$buffalo_id
 
     # make a look up table for t = 2 herds/buffalo
@@ -95,21 +97,66 @@ get_next_herds = function(currentlist, date, df = df){
     # for each herd at t=1, get herdIDs from t = 2.
     currentlist$nherds <- NA
     currentlist$maxherdsize <- NA
-    newherd <- c()
     for(i in 1:length(currentlist[,1])){
         herdvec <- currentlist$buffalo_ids[[i]]
+        newherd <- c()
         for (j in 1:length(herdvec)){
-            newherd <- cbind(newherd, lut$herd_id[match(herdvec[j], lut$buffalo_id)]) # check
+            newherd <- cbind(newherd, 
+                lut$herd_id[match(herdvec[j], lut$buffalo_id)]) # check
         }
-        currentlist$nherds[i] <- length(unique(newherd))
-        max <- ??? get largest herd
-        currentlist$maxherdsize[i] <- length(unique(max))
+        temp <- sort(table(newherd), decreasing=TRUE)
+        currentlist$nherds[i] <- length(temp)
+        currentlist$maxherdsize[i] <- temp[[1]]
+        rm(newherd, temp)
     }
+    return(currentlist)
 }
-test2 <- get_next_herds(test$buffalo_ids, "2023-08-02", df)
+test2 <- add_next_herds(test, df)
 
+
+# Loop through dates and cbind the result. 
+dates <- unique(df$date)[-length(unique(df$date))]
+
+currentlist <- get_big_herds(date = dates[1], df = df)
+combined <- add_next_herds(currentlist = currentlist, df = df)
+for(i in 2:length(dates)){
+  date <- dates[i]
+  # print(date)
+  currentlist <- get_big_herds(date = date, df = df)
+  current_with_next <- add_next_herds(currentlist = currentlist, df = df)
+  combined <- rbind(combined, current_with_next)
+}
+
+# Sort out what strange thing happened wiht end of july 2024?  
+combined$split <- combined$maxherdsize/combined$n_buffalo
+par(mfrow = c(1, 2))
+hist(combined$nherds[combined$is_fission == TRUE], main = "", xlab = "number of herd fragments", mar = c(4, 2, 2, 1), las = 1)
+hist(combined$split[combined$is_fission == TRUE], main = "", xlab = "proportion stay", las = 1, mar = c(4, 2, 2, 1))
+
+plotdf <- combined[combined$is_fission == TRUE, ]
+plotdf$month <- months(plotdf$date, abbreviate = TRUE)
+plotdf$month <- factor(plotdf$month, levels = c("Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"))
+
+ggplot(data = plotdf, aes(x = month, y = split)) + geom_boxplot() + ylab("proportion stay")
+```
+
+```{r fitbeta, echo = FALSE}
+# Fit beta distribution with mean,  a/(a+b), and var ab/((a+b)^2 (a+b+1)).
+data <- combined$split[combined$is_fission == TRUE]
+nll.beta = function(params, d){
+    shape1 <- exp(params[1])
+    shape2 <- exp(params[2])
+    - sum(dbeta(x = d, shape1 = shape1, shape2 = shape2, log = TRUE))
+}
+
+s1.guess <- log(2)
+s2.guess <- log(2)
+out <- optim(par = c(s1.guess, s2.guess), fn = nll.beta, d = data)
+exp(out$par) # 7.029168 3.677358
+hist(rbeta(1000, 7.029168, 3.677358))
 
 ```
+
 
 ![(a) Initial capture location for 2019 buffalo collared and (b) movement paths](Cross_split.png)
 
