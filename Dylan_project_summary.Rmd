@@ -1,0 +1,181 @@
+---
+title: "Dylan Project Summary"
+author: "Erin Gorsich"
+date: '2026-09-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(tidyr)
+library(sf)
+library(sp)
+df <- readRDS("herd_centroid_200m_all_dates.rds")  # herd_centroids_200m
+herd <- readRDS("herd_membership_all_dates_200m.RDS")
+
+```
+
+# Data summary for model
+- Our sample of animals is low relative to the number of buffalo in the park - with 219 animals vs. approx 25k in the 2026 survey. It is frequent, with 11hr fixes. 
+- Note all are collared animals are females/juveniles, so we are following the mixed herds vs. bachelor groups. Mixed herds still make up 22.6k animals within 291 herds. 
+![(a) Initial capture location for 2019 buffalo collared and (b) movement paths](tempfig1.png)
+
+```{r maps_parkwide_prep, echo=FALSE, include = FALSE}
+# Population features from Aug 2025 survey
+loc <- "/Users/u1774615/Library/CloudStorage/GoogleDrive-eringorsich@gmail.com/My Drive/Warwick/students/Diana/Buffalo behavior_Dylan/"
+population_data <- read.csv(paste0(loc, "buffalo_census_2025.csv"))
+pop_df <- data.frame(
+    pop_id = seq(1, length(population_data[,1]) ),
+    total = population_data$TOTAL,
+    bulls = population_data$Bulls,
+    latitude = population_data$Latitude,
+    longitude = population_data$Longitude)
+pop_df$herdtype <- NA
+pop_df$land_type <- NA
+for (i in 1:length(pop_df[, 1])){
+    ifelse((pop_df$total[[i]] - pop_df$bulls[[i]]) > 0,
+    pop_df$herdtype[[i]] <- "mixed",
+    pop_df$herdtype[[i]] <- "bulls")
+}
+n_mixed_groups <- length(pop_df[pop_df$herdtype == "mixed", ])
+n_buffalo <- sum(pop_df$total)
+
+pop_sf <- st_as_sf(pop_df, coords = c("longitude","latitude"))
+knp <- st_read(paste0(loc, "gis/bndry_kruger.shp"))
+st_crs(pop_sf) <- st_crs(knp)
+```
+
+```{r maps_parkwide, echo=FALSE}
+ggplot() + geom_sf(data = knp) + 
+    geom_sf(data = pop_sf, aes(colour = herdtype, size = total))
+# ggplot() + geom_sf(data = knp) + 
+#     geom_sf(data = pop_sf[pop_sf$herdtype == "mixed",], 
+#             aes(colour = herdtype, size = total))
+```
+
+# What proportion of the herd splits?
+- The collars were set to have about 20 individuals in 3 herds, with the remainder spread on fragment groups sourrounding them in the South. Given the number of collars per 'herd', this isn't the best dataset to answer this question. 
+- Plot shows results of splitting from herds with more than 10 collars observed.  In these herds, the pobability of staying in that group is estimated as the proportion of individuals at the time step after a split that are stil together (based on the larger of the two subsets). Most times, the split is in two. 
+- Cross et al. 2005 Animal Behavior had a high density of individuals followed in Satara. He found unique patterns for females/juveniles vs. males. He defined a fission decision index that represents, the probability that two individuals will remain together during a fission event. This is aggregated accross all groups / times at the pair-level.
+- Fission decision index (FDI) values compared to random fission decisions
+using (a) female and juvenile dyads with all fission events, (b) female
+and juvenile dyads without adult male fission events and (c) dyads
+involving adult males only. Bars represent the standard deviations
+from 1000 simulations of random decisions.
+- Can we extrapolate pairwise prob of staying together to herd level - we can use a beta-binomial distribution. So draw from it with parameters... 
+
+```{r herd_split, echo = FALSE}
+
+get_big_herds = function(date, df = df){
+    dfred <- df[df$n_buffalo > 9, c(2,3,5,6,8, 9)]
+    dfred <- dfred[dfred$date == eval(date), ]
+    return(dfred)
+}
+test <- get_big_herds("2023-08-01", df)
+
+For a given date, grab all the herds with any ids in list, for given date
+currentlist needs to dataframe
+get_next_herds = function(currentlist, date, df = df){
+    # at t=2, get data and list of herds/buffalo
+    dfred <- df[df$date == eval(date), c(2,3,5,6,8, 9)]
+    nextlist <- dfred$buffalo_id
+
+    # make a look up table for t = 2 herds/buffalo
+    lut <- data.frame(herd_id = NA, buffalo_id = NA)
+    for(i in 1:length(nextlist)){
+        herd <- nextlist[[i]]
+        herd_id <- i
+        for (j in 1:length(herd)){
+            buffalo_id <- herd[j]
+            # lut[i+j-1,] <- c(herd_id, buffalo_id)
+            lut <- rbind(lut, c(herd_id, buffalo_id))
+        }
+    }
+
+    # for each herd at t=1, get herdIDs from t = 2.
+    currentlist$nherds <- NA
+    currentlist$maxherdsize <- NA
+    newherd <- c()
+    for(i in 1:length(currentlist[,1])){
+        herdvec <- currentlist$buffalo_ids[[i]]
+        for (j in 1:length(herdvec)){
+            newherd <- cbind(newherd, lut$herd_id[match(herdvec[j], lut$buffalo_id)]) # check
+        }
+        currentlist$nherds[i] <- length(unique(newherd))
+        max <- ??? get largest herd
+        currentlist$maxherdsize[i] <- length(unique(max))
+    }
+}
+test2 <- get_next_herds(test$buffalo_ids, "2023-08-02", df)
+
+
+```
+
+![(a) Initial capture location for 2019 buffalo collared and (b) movement paths](Cross_split.png)
+
+
+
+# Dylan's Figures and Analyses
+- Cross et al. found that fission events happen frequently in Satara (185 female and juvenile fission events over a 2-year period). Their study had a high density of collars so likely reflects a good estimate of overall rates. That gives about 7 events per month, within 4-12 herds.  They sampled less frequently (and required animals to move for more than two sitings).
+
+
+```{r herdsize, echo=FALSE}
+hist(pop_df$total[pop_df$herdtype == "mixed"], xlab = "Size, Mixed herd", main = "")
+hist(pop_df$total[pop_df$herdtype == "bulls"], xlab = "Size, Bachelor herds", main = "")
+```
+
+
+```{r summary_data, echo = FALSE}
+long <- data.frame(med_buffalo = NA, n5_buffalo = NA, n95_buffalo = NA,
+    month = unique(df$Month), n_fission = NA, n_fusion = NA, rate_fission = NA, 
+    rate_fusion = NA)
+for (i in 1:length(long[,1])){
+    temp <- df[df$Month == long$month[[i]], ]
+    long$med_buffalo[[i]] <- median(temp$n_buffalo)
+    long$n5_buffalo[[i]] <- quantile(temp$n_buffalo, 0.05)[[1]]
+    long$n95_buffalo[[i]] <- quantile(temp$n_buffalo, 0.95)[[1]]
+    long$n_fission[[i]] <- sum(temp$n_fissions)
+    long$n_fusion[[i]] <- sum(temp$n_fusions)
+    long$rate_fission[[i]] <- sum(temp$n_fissions)/length(temp[,1])
+    long$rate_fusion[[i]] <- sum(temp$n_fusions)/length(temp[,1])
+}
+
+ggplot(data = long, aes(x = month, y = med_buffalo)) + 
+    ylim(1, max(long$n95_buffalo)) + 
+    ylab("Collars per group (med and 95th percentile)") + 
+    geom_pointrange(aes(ymin = n5_buffalo, ymax = n95_buffalo))
+
+longer <- long %>% 
+  pivot_longer(
+    cols = `n_fission`:`n_fusion`, 
+    names_to = "events",
+    values_to = "value")
+
+ggplot(data = longer, 
+       aes(x = month, y = value, colour = events, linetype = events)) + 
+    geom_path() +geom_point() +  
+    ylab("Number of events") + 
+    scale_colour_viridis_d()
+
+longer <- long %>% 
+  pivot_longer(
+    cols = `rate_fission`:`rate_fusion`, 
+    names_to = "event_rate",
+    values_to = "value")    
+ggplot(data = longer, 
+       aes(x = month, y = value, colour = event_rate, linetype = event_rate)) + 
+    geom_path() +geom_point() +  
+    ylab("events per herd month") + 
+    scale_colour_viridis_d()    
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

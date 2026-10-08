@@ -1,5 +1,10 @@
-setwd("~/My Drive/Warwick/students/Diana/Buffalo behavior_Dylan")
+# setwd("~/My Drive/Warwick/students/Diana/Buffalo behavior_Dylan")
+setwd("/Users/u1774615/Library/CloudStorage/GoogleDrive-eringorsich@gmail.com/My Drive/Warwick/students/Diana/Buffalo behavior_Dylan")
 library(sf)
+library(ggplot2)
+
+ncycles <- 26
+ndays <- 14
 
 # Population features from Aug 2025 survey
 population_data <- read.csv("buffalo_census_2025.csv")
@@ -16,28 +21,46 @@ for (i in 1:length(pop_df[, 1])){
     pop_df$herdtype[[i]] <- "mixed",
     pop_df$herdtype[[i]] <- "bulls")
 }
-n_groups <- length(pop_df[,1])
 n_mixed_groups <- length(pop_df[pop_df$herdtype == "mixed", ])
 n_buffalo <- sum(pop_df$total)
 par(mfrow = c(1, 2))
 hist(pop_df$total[pop_df$herdtype == "mixed"], xlab = "Size, Mixed herd", main = "")
 hist(pop_df$total[pop_df$herdtype == "bulls"], xlab = "Size, Bachelor herds", main = "")
 
-# pop_sf <- st_as_sf(pop_df, coords = c("longitude","latitude"))
-# ecozone <- 
-# pop_df$ecozone <- overlay(r1, r2, fun=function(x,y){return(x/y)})
+# Add ecozone
+pop_sf <- st_as_sf(pop_df, coords = c("longitude","latitude"))
 
+ecozone <- st_read("gis/landscapes.shp")
+pop_df$ecozone 
+pop_df$ecozone <- st_join(pop_sf, ecozone, join = st_intersects)$LANDSCAPE
+# need to combine intellegently... (also in analysis)
 
-# Set initial conditions. Put one infected in the second herd... (UPDATE ME LATER)
-make_initial_states <- function(pop_df, n_groups) {
+knp <- st_read("gis/bndry_kruger.shp")
+st_crs(pop_sf) <- st_crs(knp)
+
+ggplot() + geom_sf(data = knp) + 
+    geom_sf(data = pop_sf, aes(colour = herdtype, size = total))
+ggplot() + geom_sf(data = knp) + 
+    geom_sf(data = pop_sf[pop_sf$herdtype == "mixed",], 
+            aes(colour = herdtype, size = total))
+
+    #'   geom_sf(data = nc_3857, colour = "red", fill = NA)
+
+# Set initial conditions. Put one infected in the first herd... (UPDATE ME LATER)
+make_initial_states <- function(pop_df) {
+    n_groups <- length(pop_df[,1])
     state <- matrix(0L, nrow = n_groups, ncol = 5L,
         dimnames = list(NULL, c("S", "E", "I", "R", "C")) )
-    state[, "S"] <- pop_df$total - c(0, 1, rep(0, n_groups - 2))
-    state[, "I"] <- c(0, 1, rep(0, n_groups - 2))
+    state[, "S"] <- pop_df$total - c(1, rep(0, n_groups - 1))
+    state[, "I"] <- c(1, rep(0, n_groups - 1))
     return(state)
 }
-initial_state <- make_initial_states(pop_df, n_groups)
+initial_state <- make_initial_states(pop_df[pop_df$herdtype == "mixed",]) # HERE!!!!!
+initial_bachelor_state <- make_initial_states(pop_df[pop_df$herdtype == "bulls",])
+fullstate <- cbind(initial_state, pop_df[pop_df$herdtype == "mixed", ])
 
+plot(x = pop_df$longitude, y = pop_df$latitude, pch = 19, 
+     col = "dark blue", cex = )
 
 # Set parameters for stochastic disease dynamics, non-interacting populations
 params <- list(beta = 2.8,
@@ -48,8 +71,18 @@ params <- list(beta = 2.8,
     tau = 1.0              # tau leap
 )
 
+# UPDATE HERE - MAKE SPLITTING TIME VARYING, HERD-SPECIFIC AND CHANGE WITH DENSITY? 
+# Set parameters for movement
+mparams <- list(
+    split_prob = 0.5,     # when a group splits, prob each individual goes in each daughter group
+    # The per herd prob of splitting at 2 weeks. On average a herd undergoes one event every two weeks (or 2 per month)
+    merge_beta_shape1 = 10, # probably a vector
+    merge_beta_shape2 = 1, 
+    split_beta_shape1 = 10,
+    split_beta_shape2 = 1)
+params <- c(params, mparams)
 
-# Run one stochastic ODE for any population
+# Run one stochastic simulation for all populations
 run_one_stochastic_dz = function(state, days, params){
     n_steps <- ceiling(days / params$tau)
     p_EI <- 1 - exp(-params$epsilon * params$tau)
@@ -85,27 +118,33 @@ run_one_stochastic_dz = function(state, days, params){
 }
 
 # Test run, only one seed infection, one takes off)
-state <- run_one_stochastic_dz(state = initial_state, days = 14, params)
-
+state <- run_one_stochastic_dz(state = initial_state, days = ndays, params)
+fullstate <- cbind(state, pop_df[pop_df$herdtype == "mixed", ])
 
 # Set up herd parameters
 # Randomly divide one population into two populations while preserving all
 # compartment totals. A 50:50 expected split is used here.
-split_population <- function(population) {
+split_group <- function(group, params) {
     daughter_1 <- as.integer(mapply(
-        FUN = function(total) rbinom(1L, size = total, prob = 0.5),
-        total = population
+        FUN = function(total) rbinom(1L, size = total, prob = params$split_prob),
+        total = group
     ))
-    daughter_2 <- as.integer(population - daughter_1)
+    daughter_2 <- as.integer(group - daughter_1)
     rbind(daughter_1, daughter_2)
 }
 
-test <- split_population(state[2,])
+# update_full_states
+
+test <- split_group(state[2,], params)
+
+# calculate_p_merge = function ()
+
 
 # Apply merge/split/stay events to the current population state.
 apply_population_events <- function(state, params) {
     n <- nrow(state)
     
+    # Stochastically draw merge/split probabilities each run
     p_merge <- rbeta(
         1L, params$merge_beta_shape1, params$merge_beta_shape2
     )
@@ -118,24 +157,28 @@ apply_population_events <- function(state, params) {
         scale <- 1 / (p_merge + p_split)
         p_merge <- p_merge * scale
         p_split <- p_split * scale
+        p_something <- p_merge + p_split
     }
     
+    # Ensure the three event probabilities form a valid categorical model.
     event <- sample(
         c("merge", "split", "stay"),
         size = n,
         replace = TRUE,
-        prob = c(p_merge, p_split, 1 - p_merge - p_split)
+        prob = c(p_merge, p_split, 1 - p_something)
     )
     
     merge_candidates <- which(event == "merge")
     split_candidates <- which(event == "split")
+    
+    # Who merges with who is defined by index order.  UPDATE TO MIN DISTANCE
     merge_pairs <- split(merge_candidates, ceiling(seq_along(merge_candidates) / 2))
     
     output <- list()
     output_event <- character(0)
     used <- rep(FALSE, n)
     
-    # Merge candidates in random pairs. An unpaired candidate stays unchanged.
+    # Merge candidates in pairs. An unpaired candidate stays unchanged.
     if (length(merge_pairs) > 0L) {
         for (pair in merge_pairs) {
             if (length(pair) == 2L) {
@@ -147,7 +190,7 @@ apply_population_events <- function(state, params) {
         }
     }
     
-    # Unpaired merge candidates and stay candidates remain as single populations.
+    # Unpaired merge candidates and stay candidates remain as single populations, odd numbers
     unchanged <- which(!used & event != "split")
     for (index in unchanged) {
         output[[length(output) + 1L]] <- state[index, ]
@@ -157,7 +200,7 @@ apply_population_events <- function(state, params) {
     
     # Split selected populations into two daughter populations.
     for (index in split_candidates) {
-        daughters <- split_population(state[index, ])
+        daughters <- split_group(state[index, ], params)
         output[[length(output) + 1L]] <- daughters[1, ]
         output[[length(output) + 1L]] <- daughters[2, ]
         output_event <- c(output_event, "split", "split")
@@ -168,31 +211,27 @@ apply_population_events <- function(state, params) {
     colnames(new_state) <- colnames(state)
     rownames(new_state) <- NULL
     
-    list(
+    return(list(
         state = matrix(as.integer(new_state), ncol = 5L,
                        dimnames = list(NULL, colnames(state))),
-        event = output_event,
-        p_merge = p_merge,
-        p_split = p_split,
-        n_before = n,
-        n_after = nrow(new_state)
-    )
+        event = output_event, p_merge = p_merge, p_split = p_split, 
+        n_before = n, n_after = nrow(new_state)))
 }
 
-run_model <- function(params, seed = 2026) {
+run_model <- function(params, df, seed = 2026) {
     set.seed(seed)
-    state <- make_initial_state(params)
-    history <- vector("list", params$cycles)
-    event_log <- vector("list", params$cycles)
+    state <- make_initial_states(df)
+    history <- vector("list", ncycles)
+    event_log <- vector("list", ncycles)
     
-    for (cycle in seq_len(params$cycles)) {
-        state_before_event <- simulate_block(state, params$block_days, params)
+    for (cycle in seq_len(ncycles)) {
+        state_before_event <- run_one_stochastic_dz(state, ndays, params)
         event_result <- apply_population_events(state_before_event, params)
         state <- event_result$state
         
         history[[cycle]] <- list(
             cycle = cycle,
-            end_day = cycle * params$block_days,
+            end_day = cycle * ndays,
             state_before_event = state_before_event,
             state_after_event = state,
             p_merge = event_result$p_merge,
@@ -201,7 +240,7 @@ run_model <- function(params, seed = 2026) {
         
         event_log[[cycle]] <- data.frame(
             cycle = cycle,
-            end_day = cycle * params$block_days,
+            end_day = cycle * ndays,
             p_merge = event_result$p_merge,
             p_split = event_result$p_split,
             populations_before = event_result$n_before,
@@ -222,8 +261,9 @@ run_model <- function(params, seed = 2026) {
     )
 }
 
+
 # Run 26 cycles of 14 days: total simulated time = 364 days.
-result <- run_model(parameters, seed = 2026)
+result <- run_model(parameters, pop_df[pop_df$herdtype == "mixed",], seed = 2026)
 
 # Event summary.
 print(result$event_log)
